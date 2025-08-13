@@ -1,6 +1,5 @@
 // Runtime: thread orchestration, execution, and value model
 use crate::ast::*;
-use crate::runtime::fmt; // printing helpers
 use anyhow::{bail, Result};
 use rustc_hash::FxHashMap as HashMap;
 use std::cell::RefCell;
@@ -272,7 +271,9 @@ fn exec_expr_env(ctx: &mut RuntimeCtx, expr: &Expr, vars: &mut HashMap<String, R
                             local_env.insert(pname.0.clone(), Rc::new(RefCell::new(av)));
                         }
                         exec_block(ctx, &f.body, &mut local_env)?;
-                        if let Some(rn) = recv_var { return Ok(local_env.get(&rn.0).map(|c| c.borrow().clone()).unwrap_or(Value::Unit)); }
+                        if let Some(rn) = recv_var {
+                            return Ok(local_env.get(&rn.0).map(|c| c.borrow().clone()).unwrap_or(Value::Unit));
+                        }
                         return Ok(Value::Unit);
                     }
                 }
@@ -298,30 +299,33 @@ fn exec_expr_env(ctx: &mut RuntimeCtx, expr: &Expr, vars: &mut HashMap<String, R
                 _ => bail!("type error in binary op"),
             }
         }
-        Expr::PipeArrow(lhs, rhs) => {
-            // Dataflow: lhs |> rhs
-            // Rules: if rhs is a call or member call, pass lhs as first argument (and as mut by default)
-            match &**rhs {
+        Expr::PipeArrow(lhs, rhs, pattern) => {
+            // Dataflow: lhs |> rhs -> pattern
+            let result: Value = match &**rhs {
                 Expr::Call { callee, args } => {
                     // build a synthetic call with lhs as first arg
                     let mut new_args = Vec::with_capacity(args.len() + 1);
                     new_args.push((**lhs).clone());
                     new_args.extend(args.clone());
-                    exec_expr_env(ctx, &Expr::Call { callee: callee.clone(), args: new_args }, vars)
+                    exec_expr_env(ctx, &Expr::Call { callee: callee.clone(), args: new_args }, vars)?
                 }
                 Expr::Member { .. } => {
                     // treat as method call with zero args: lhs |> obj.method  => obj.method(lhs)
-                    exec_expr_env(ctx, &Expr::Call { callee: rhs.clone(), args: vec![(**lhs).clone()] }, vars)
+                    exec_expr_env(ctx, &Expr::Call { callee: rhs.clone(), args: vec![(**lhs).clone()] }, vars)?
                 }
                 _ => {
                     // default: return rhs(lhs) if rhs is Ident, else just return lhs
                     if let Expr::Ident(_) = &**rhs {
-                        exec_expr_env(ctx, &Expr::Call { callee: rhs.clone(), args: vec![(**lhs).clone()] }, vars)
+                        exec_expr_env(ctx, &Expr::Call { callee: rhs.clone(), args: vec![(**lhs).clone()] }, vars)?
                     } else {
-                        Ok(exec_expr_env(ctx, lhs, vars)?)
+                        exec_expr_env(ctx, lhs, vars)?
                     }
                 }
+            };
+            if let Some(pat) = pattern {
+                apply_pattern(pat, &result, vars)?;
             }
+            Ok(result)
         }
         Expr::Member { target, name } => {
             let v = exec_expr_env(ctx, target, vars)?;
@@ -372,6 +376,11 @@ fn exec_expr_env(ctx: &mut RuntimeCtx, expr: &Expr, vars: &mut HashMap<String, R
                 _ => bail!("Range bounds must be numbers"),
             }
         }
+        Expr::Tuple(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for e in items { out.push(exec_expr_env(ctx, e, vars)?); }
+            Ok(Value::Tuple(out))
+        }
     }
 }
 
@@ -383,8 +392,9 @@ fn exec_expr_env(ctx: &mut RuntimeCtx, expr: &Expr, vars: &mut HashMap<String, R
     Str(String),
     Bool(bool),
     Struct { name: String, fields: HashMap<String, Value> },
-        Range {start: f64, end: f64, inclusive: bool},
-        List(Vec<Value>),
+    Range {start: f64, end: f64, inclusive: bool},
+    List(Vec<Value>),
+    Tuple(Vec<Value>),
 }
 
 impl std::fmt::Display for Value {
@@ -410,10 +420,18 @@ impl std::fmt::Display for Value {
             Value::List(items) => {
                 write!(f, "[")?;
                 for (i, v) in items.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 { write!(f, " | ")?; }
                     write!(f, "{}", v)?;
                 }
                 write!(f, "]")
+            }
+            Value::Tuple(items) => {
+                write!(f, "(")?;
+                for (i, v) in items.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", v)?;
+                }
+                write!(f, ")")
             }
         }
     }
@@ -428,7 +446,32 @@ fn truthy(v: &Value) -> bool {
         Value::Unit => false,
         Value::Range { .. } => true,
         Value::List(items) => !items.is_empty(),
+        Value::Tuple(items) => !items.is_empty(),
     }
 }
+fn apply_pattern(
+    pat: &Pattern,
+    value: &Value,
+    vars: &mut HashMap<String, Rc<RefCell<Value>>>,
+) -> Result<()> {
+    match (pat, value) {
+        (Pattern::Ident(name), v) => {
+            vars.insert(name.0.clone(), Rc::new(RefCell::new(v.clone())));
+        }
+        (Pattern::Tuple(patterns), Value::Tuple(items)) => {
+            if patterns.len() != items.len() {
+                bail!("pattern arity mismatch");
+            }
+            for (p, item) in patterns.iter().zip(items.iter()) {
+                apply_pattern(p, item, vars)?;
+            }
+        }
+        (Pattern::Wildcard, _) => {}
+        _ => bail!("pattern mismatch"),
+    }
+    Ok(())
+}
+
+
 
 

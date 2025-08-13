@@ -439,7 +439,7 @@ impl<'a> Parser<'a> {
                 if !self.check(&TokenKind::RBracket) {
                     loop {
                         items.push(self.parse_expr()?);
-                        if self.check(&TokenKind::Comma) { self.bump_kind(); continue; }
+                        if self.check(&TokenKind::Bar) { self.bump_kind(); continue; }
                         break;
                     }
                 }
@@ -505,15 +505,26 @@ impl<'a> Parser<'a> {
         let mut left = self.parse_primary()?;
         loop {
             let Some(op_tok) = self.peek_kind() else { break };
+            
             if matches!(op_tok, TokenKind::PipeArrow) {
                 // custom handling for |> dataflow
                 self.bump_kind();
                 let rhs = self.parse_primary()?;
-                left = Expr::PipeArrow(Box::new(left), Box::new(rhs));
+                // Optional pattern for |> dataflow -> (data)
+                let pattern = if self.check(&TokenKind::Arrow) {
+                    self.bump_kind(); // Consume |>
+                    Some(self.parse_pattern()?)
+                } else {None};
+                
+                left = Expr::PipeArrow(
+                    Box::new(left),
+                    Box::new(rhs),
+                    pattern,);
                 continue;
             }
+
             let Some(op_prec) = Self::precedence(&op_tok) else { break };
-            if op_prec < min_prec { break; }
+            if op_prec < min_prec { break;}
             // consume operator
             let op_tok = self.bump_kind().unwrap();
             let right_min_prec = if matches!(op_tok, crate::lexer::TokenKind::DStar) { op_prec } else { op_prec + 1 };
@@ -724,6 +735,39 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::RBrace)?;
         Ok(StructDecl { name, fields, embedded, is_pub: false })
     }
-}
+    fn parse_pattern(&mut self) -> Result<Pattern> {
+       match self.peek_kind() {
+        Some(TokenKind::Ident(_)) => {
+        let ident = self.parse_ident()?;
+        if ident.0 == "_" {
+        Ok(Pattern::Wildcard)
+        } else{
+        Ok(Pattern::Ident(ident))
+        }
+        }
+        Some(TokenKind::LParen) => {
+        self.bump_kind();
+        let mut patterns = Vec::new();
+        if !self.check(&TokenKind::RParen){
+            loop { 
+            patterns.push(self.parse_pattern()?);
+            if self.check(&TokenKind::Comma){
+                self.bump_kind();
+                continue;
+            }
+            break;
+            }
+        }
+            self.expect(TokenKind::RParen)?;
+            Ok(Pattern::Tuple(patterns))
+        }
+        _ =>{
+        let token_peeked = self.peek_kind();
+        bail!("Expected pattern found {:?}",token_peeked)
+        }
+        }
+       }    
+    }
+
 
 

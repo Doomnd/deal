@@ -161,11 +161,12 @@ fn gen_for(out: &mut String, fd: &ForDecl, level: usize) -> Result<()> {
 fn gen_expr(e: &Expr) -> Result<String> {
     Ok(match e {
         Expr::Ref(inner) => gen_expr(inner)?,
-        Expr::PipeArrow(lhs, rhs) => {
-            // Lower pipe to call: rhs(lhs)
+        Expr::PipeArrow(lhs, rhs, _pattern) => {
+            // Lower pipe to call: rhs(lhs). Pattern is ignored in codegen for now.
             match &**rhs {
                 Expr::Call { callee, args } => {
-                    let mut a = vec![gen_expr(lhs)?];
+                    let mut a = Vec::with_capacity(args.len() + 1);
+                    a.push(gen_expr(lhs)?);
                     for ar in args { a.push(gen_expr(ar)?); }
                     format!("{}({})", gen_expr(callee)?, a.join(", "))
                 }
@@ -181,6 +182,10 @@ fn gen_expr(e: &Expr) -> Result<String> {
         Expr::List(items) => {
             let inner: Result<Vec<String>> = items.iter().map(gen_expr).collect();
             format!("vec![{}]", inner?.join(", "))
+        }
+        Expr::Tuple(items) => {
+            let inner: Result<Vec<String>> = items.iter().map(gen_expr).collect();
+            format!("({})", inner?.join(", "))
         }
         Expr::EmptyListOf(ty) => format!("Vec::<{}>::new()", map_type(ty)),
         Expr::Unary { op, expr } => match op {

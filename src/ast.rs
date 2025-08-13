@@ -130,6 +130,12 @@ pub struct LetBinding {
     pub ty: Option<TypeName>,
     pub init: Option<Expr>,
 }
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pattern{
+    Ident(Ident),
+    Tuple(Vec<Pattern>),
+    Wildcard,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -152,7 +158,8 @@ pub enum Expr {
     Binary { op: BinOp, left: Box<Expr>, right: Box<Expr> },
     StructLit { name: Ident, fields: Vec<(Ident, Expr)> },
     Range { start: Box<Expr>, end:Box<Expr>, inclusive : bool},
-    PipeArrow(Box<Expr>, Box<Expr>),
+    PipeArrow(Box<Expr>, Box<Expr>, Option<Pattern>),
+    Tuple(Vec<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]

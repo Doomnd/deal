@@ -54,6 +54,7 @@ pub enum TokenKind {
     Ge,
     DoublePipe,
     PipeArrow,
+    Bar,
     Amp,
     // literals/idents
     Ident(Ident),
@@ -193,7 +194,7 @@ impl<'a> Iterator for Lexer<'a> {
                 } else if let Some((_,'|')) = self.peek() { self.bump();
 
                     return Some(Ok(Token { kind: TokenKind::DoublePipe, offset: start, len: 2 }));} else {
-                return Some(Err(LexError::UnexpectedChar { ch: '|' , pos:start })); // this should
+                return Some(Ok(Token {kind: TokenKind::Bar, offset: start, len: 1})); // this should
                                                                                     // dealt with 
                     }}
             '!' => {
